@@ -131,6 +131,7 @@ class RedisBloomFilter(object):
             pipeline.getbit(self.bitkey, offset+k)
             offset += bits_per_slice
         results = pipeline.execute()
+        #print (iter(hashes)), results
         return all(results)
 
     def __len__(self):
@@ -181,18 +182,19 @@ class ScalableRedisBloomFilter(object):
 
     def __init__(self, initial_capacity=1000, error_rate=0.001,
                        connection=None, 
-                       bitkey='bloom_filter', clear_filter=False,
+                       prefixbitkey='scalable_bloom_filter', clear_filter=False,
                        mode=SMALL_SET_GROWTH):
         if not error_rate or error_rate < 0:
             raise ValueError("Error_Rate must be a decimal less than 0.")
+        if not initial_capacity > 0:
+            raise ValueError("Capacity must be > 0")
 
         self.connection = connection
         if not self.connection:
             import redis
             self.connection = redis.Redis()
-        self.bitkey = bitkey
-        if clear_filter:
-            self.connection.delete(self.bitkey)
+        self.prefixbitkey = prefixbitkey
+        self.clear_filter = clear_filter
 
         self._setup(mode, 0.9, initial_capacity, error_rate)
         self.filters = []
@@ -215,14 +217,19 @@ class ScalableRedisBloomFilter(object):
         if not self.filters:
             filter = RedisBloomFilter(
                 capacity=self.initial_capacity,
-                error_rate=self.error_rate * (1.0 - self.ratio))
+                error_rate=self.error_rate * (1.0 - self.ratio),
+                bitkey='%s_%d' % (self.prefixbitkey, len(self.filters)+1),
+                clear_filter=self.clear_filter
+                )
             self.filters.append(filter)
         else:
             filter = self.filters[-1]
             if filter.count >= filter.capacity:
                 filter = RedisBloomFilter(
                     capacity=filter.capacity * self.scale,
-                    error_rate=filter.error_rate * self.ratio)
+                    error_rate=filter.error_rate * self.ratio,
+                    bitkey='%s_%d' % (self.prefixbitkey, len(self.filters)+1),
+                    clear_filter=self.clear_filter)
                 self.filters.append(filter)
         filter.add(key)
         return False
@@ -241,10 +248,24 @@ class ScalableRedisBloomFilter(object):
         return sum(f.count for f in self.filters)
 
 def test():
-    f = ScalableRedisBloomFilter(error_rate=0.001)
-    for i in range_fn(0, f.initial_capacity*3):
-        f.add(i)
-    print (0 in f)
+    scalablef = ScalableRedisBloomFilter(initial_capacity=100, error_rate=0.001, prefixbitkey='hehe', clear_filter=True)
+    f = RedisBloomFilter(1000, error_rate=0.001, bitkey='haha', clear_filter=True)
+    keys_in = []
+    keys_notin = []
+    from uuid import uuid4
+    for i in range_fn(500):
+        keys_in.append(str(uuid4()))
+    for i in range_fn(500):
+        keys_notin.append(str(uuid4()))
+
+    for key in keys_in:
+        scalablef.add(key)
+        f.add(key)
+
+    print ([ key in scalablef for key in keys_in ])
+    print ([ key in scalablef for key in keys_notin ])
+    print ([ key in f for key in keys_in ])
+    print (([ key in f for key in keys_notin ]))
 
 if __name__ == '__main__':
    test()
