@@ -3,4 +3,4 @@
     RedisBloomFilter Class
 """
 
-from .filter import RedisBloomFilter
+from .redisfilter import RedisBloomFilter
